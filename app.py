@@ -91,4 +91,4 @@ def post_export_to_text():
     })
 
 if __name__ == "__main__":
-    app.run(debug=True, port=port)
+    app.run(host="127.0.0.1",debug=False, port=port)
