@@ -32,6 +32,14 @@ Endpoint'ler:
 """
 
 import os
+
+
+# Set thread limits for underlying libraries if PDF_NUM_THREADS is defined
+threads_env = os.environ.get("PDF_NUM_THREADS")
+if threads_env:
+    os.environ["OMP_NUM_THREADS"] = threads_env
+    os.environ["MKL_NUM_THREADS"] = threads_env
+
 import base64
 import logging
 import secrets
@@ -43,7 +51,9 @@ from pathlib import Path
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from docling.document_converter import DocumentConverter
+from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling.datamodel.pipeline_options import PdfPipelineOptions, AcceleratorOptions
+from docling.datamodel.base_models import InputFormat
 from dotenv import load_dotenv
 load_dotenv()
 # ---------------------------------------------------------------------------
@@ -69,6 +79,14 @@ MAX_FILE_SIZE = int(os.environ.get("PDF_MAX_SIZE_MB", 10)) * 1024 * 1024
 # Bozuk veya aşırı karmaşık PDF dosyaları sunucuyu süresiz bloke edebilir.
 # Bu limit aşıldığında istek 504 Gateway Timeout ile sonlandırılır.
 CONVERSION_TIMEOUT = int(os.environ.get("PDF_CONVERSION_TIMEOUT", 300))
+
+# OCR control (default: enabled)
+PDF_OCR_ENABLED = os.environ.get("PDF_OCR_ENABLED", "true").lower() in ("true", "1", "yes")
+
+# Number of CPU threads (default: let Docling decide)
+PDF_NUM_THREADS = os.environ.get("PDF_NUM_THREADS")
+if PDF_NUM_THREADS is not None:
+    PDF_NUM_THREADS = int(PDF_NUM_THREADS)
 
 # ---------------------------------------------------------------------------
 # API Key Yönetimi
@@ -205,7 +223,25 @@ def _check_api_key():
 
 # DocumentConverter ağır bir nesne olduğundan uygulama başlangıcında bir kez
 # oluşturulur ve tüm isteklerde paylaşılır.
-converter = DocumentConverter()
+# Build pipeline options from environment variables
+pipeline_options = PdfPipelineOptions()
+
+# Disable OCR if requested
+pipeline_options.do_ocr = PDF_OCR_ENABLED
+
+# Limit CPU threads if specified
+if PDF_NUM_THREADS is not None:
+    pipeline_options.accelerator_options = AcceleratorOptions(
+        num_threads=PDF_NUM_THREADS,
+        device="cpu"
+    )
+
+# Apply options specifically to PDF input
+format_options = {
+    InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+}
+
+converter = DocumentConverter(format_options=format_options)
 
 # Eşzamanlılık mekanizması: Aynı anda yalnızca bir dönüşüm işlemi çalışır.
 # PDF dönüştürme CPU-yoğun olduğundan, kurum içi düşük trafikli kullanımda
@@ -493,6 +529,8 @@ if __name__ == "__main__":
     logger.info("=" * 60)
     logger.info("PDF Export API starting")
     logger.info("Host: %s:%d", HOST, PORT)
+    logger.info("OCR enabled: %s", PDF_OCR_ENABLED)
+    logger.info("CPU threads: %s", PDF_NUM_THREADS if PDF_NUM_THREADS else "auto")
     logger.info("Allowed directory: %s", ALLOWED_DIR)
     logger.info("Max file size: %.0f MB", MAX_FILE_SIZE / (1024 * 1024))
     logger.info("Available formats: %s", ", ".join(EXPORT_FORMATS.keys()))
